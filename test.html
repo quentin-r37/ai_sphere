@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interactive Three.js Sphere - AI Assistant</title>
+    <title>Interactive Three.js Sphere - Reacting to Sound</title>
     <link href='https://fonts.googleapis.com/css?family=Lato:400,700' rel='stylesheet' type='text/css'>
     <style>
-        html,
-        body {
+        html, body {
             height: 100%;
             width: 100%;
             margin: unset;
@@ -83,6 +82,55 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { createNoise3D } from 'https://cdn.skypack.dev/simplex-noise@4.0.0';
 
+        class Microphone {
+            constructor() {
+                this.ready = false;
+                this.volume = 0;
+                this.smoothedVolume = 0;
+                this.levels = [];
+                this.smoothingFactor = 0.08;
+                navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                    .then((stream) => {
+                        this.stream = stream;
+                        this.init();
+                    });
+            }
+
+            init() {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                this.mediaStreamSourceNode = this.audioContext.createMediaStreamSource(this.stream);
+                this.analyserNode = this.audioContext.createAnalyser();
+                this.analyserNode.fftSize = 256;
+                this.mediaStreamSourceNode.connect(this.analyserNode);
+                this.floatTimeDomainData = new Float32Array(this.analyserNode.fftSize);
+                this.byteFrequencyData = new Uint8Array(this.analyserNode.fftSize);
+                this.ready = true;
+            }
+
+            getVolume() {
+                let sumSquares = 0.0;
+                for (const amplitude of this.floatTimeDomainData) {
+                    sumSquares += amplitude * amplitude;
+                }
+                return Math.sqrt(sumSquares / this.floatTimeDomainData.length);
+            }
+
+            update() {
+                if (!this.ready) return;
+                this.analyserNode.getFloatTimeDomainData(this.floatTimeDomainData);
+                this.analyserNode.getByteFrequencyData(this.byteFrequencyData);
+                this.volume = this.getVolume();
+
+                // Smooth the volume
+                this.smoothedVolume = this.lerp(this.smoothedVolume, this.volume, this.smoothingFactor);
+            }
+
+            lerp(start, end, factor) {
+                return (1 - factor) * start + factor * end;
+            }
+        }
+
+        // Three.js setup
         var canvas = document.getElementById("canvas");
         let t, s;
         setDefaults();
@@ -95,6 +143,7 @@
             t = 0.0002;
             s = 0.5;
         };
+
         var scene = new THREE.Scene();
         var renderer = new THREE.WebGLRenderer({
             antialias: true,
@@ -104,7 +153,7 @@
         const noise3D = createNoise3D();
         renderer.setPixelRatio(window.devicePixelRatio || 1);
         renderer.setSize(window.innerWidth, window.innerHeight);
-        var camera = new THREE.PerspectiveCamera(80, canvas.width/canvas.height, 0.1, 1000);
+        var camera = new THREE.PerspectiveCamera(80, canvas.width / canvas.height, 0.1, 1000);
         camera.position.z = 5;
         var controls = new OrbitControls(camera, renderer.domElement);
         controls.autoRotate = true;
@@ -124,6 +173,9 @@
         let sphere = new THREE.Mesh(geom, mat);
         scene.add(sphere);
 
+        // Microphone initialization
+        const microphone = new Microphone();
+
         let update = (timeFactor, spikes) => {
             let time = performance.now() * timeFactor;
             const positionAttribute = sphere.geometry.getAttribute('position');
@@ -137,7 +189,9 @@
         }
 
         function animate() {
-            update(t, s);
+            microphone.update();
+            const smoothedVolume = microphone.smoothedVolume;
+            update(t * (1 + smoothedVolume), s * (1 + smoothedVolume * 5));
             controls.update();
             renderer.render(scene, camera);
             requestAnimationFrame(animate);
@@ -145,7 +199,7 @@
         requestAnimationFrame(animate);
 
         window.addEventListener('resize', onWindowResize, false);
-        function onWindowResize(){
+        function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
